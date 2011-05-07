@@ -1,9 +1,32 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (C) 2010-2011 by Nikita Petrov                                      
+//	                                                                             
+// Permission is hereby granted, free of charge, to any person obtaining a copy  
+// of this software and associated documentation files (the "Software"), to deal 
+// in the Software without restriction, including without limitation the rights  
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell    
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//	
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//	
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+////////////////////////////////////////////////////////////////////////////////
+
 package ru.hrundik.fScheme.exec
 {
 	import ru.hrundik.fScheme.Name;
 	import ru.hrundik.fScheme.Pair;
 	import ru.hrundik.fScheme.parser.SchemeParser;
 	import ru.hrundik.fScheme.util.DisplayUtil;
+	import flash.utils.getDefinitionByName;
 	
 	public dynamic class DefaultLexicalContext implements IContext
 	{
@@ -219,16 +242,25 @@ package ru.hrundik.fScheme.exec
 		
 		public function call_cc(handler:Function):void
 		{
-			var frozenContinuation:FrozenContinuation = new FrozenContinuation(continuation);
 			if(continuation.verbose)
-				trace("SAVING STATE");
+			{
+				trace("****SAVING STATE:");
+				continuation.traceState();
+				trace("*****************");
+			}
+			
+			var frozenContinuation:FrozenContinuation = new FrozenContinuation(continuation);
 			var escapeFunction:Function = function (...rest):*
 			{
 				if(continuation.verbose)
-					trace("RESTORING STATE");
+					trace("****RESTORING STATE");
 				continuation.actionStack = frozenContinuation.actionStack.concat(); // immutable, so create copy
 				continuation.resultStack = frozenContinuation.resultStack.concat(); // immutable, so create copy
 				continuation.lexicalContext = frozenContinuation.lexicalContext;
+				
+				if (!continuation.executing)
+					continuation.executeToAction();
+				
 				return rest[0];
 			};
 			continuation.resultStack.push(handler);
@@ -884,6 +916,11 @@ package ru.hrundik.fScheme.exec
 		public function ceiling(num:Number):Number
 		{
 			return Math.ceil(num);
+		}
+		
+		public function random():Number
+		{
+			return Math.random();
 		}
 		
 		public function round(num:Number):Number

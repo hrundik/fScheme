@@ -1,12 +1,36 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (C) 2010-2011 by Nikita Petrov                                      
+//	                                                                             
+// Permission is hereby granted, free of charge, to any person obtaining a copy  
+// of this software and associated documentation files (the "Software"), to deal 
+// in the Software without restriction, including without limitation the rights  
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell    
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//	
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//	
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+////////////////////////////////////////////////////////////////////////////////
+
 package ru.hrundik.fScheme.exec
 {
+	import flash.utils.getDefinitionByName;
+	
 	import ru.hrundik.fScheme.Name;
 	import ru.hrundik.fScheme.Pair;
 	import ru.hrundik.fScheme.Promise;
+	import flash.utils.getTimer;
 	
-	// v 0.3a
-	
-	public class Continuation
+	// v 0.7
+	final public class Continuation
 	{
 		public var resultStack:Array;
 		public var actionStack:Vector.<Action>;
@@ -20,7 +44,7 @@ package ru.hrundik.fScheme.exec
 		
 		public var verbose:Boolean = false;
 		
-		public function Continuation(lexicalContext:IContext=null, specialForms:Object = null)
+		public function Continuation(lexicalContext:IContext=null, specialFormsClass:Class = null)
 		{
 			resultStack = new Array();
 			actionStack = new Vector.<Action>();
@@ -31,12 +55,28 @@ package ru.hrundik.fScheme.exec
 				DefaultLexicalContext(lexicalContext).continuation = this; 
 			
 			defaultContext = lexicalContext;
-			
-			if (specialForms == null)
-				specialForms = new SpecialForms(this);
 			this.lexicalContext = lexicalContext;
-			this.specialForms = specialForms;
 			
+			if (specialFormsClass == null)
+				this.specialForms = new SpecialForms(this);
+			else
+				this.specialForms = new specialFormsClass(this);
+			
+			init();
+		}
+		
+		private var actionMap:Object;
+		
+		private var evalsTmp:Vector.<Action>;
+		
+		private var _executing:Boolean;
+		public function get executing():Boolean
+		{
+			return _executing;
+		}
+		
+		private function init():void
+		{
 			actionMap = {};
 			actionMap[ActionCodes.CALL] = call;
 			actionMap[ActionCodes.EVALUATE] = evaluate;
@@ -53,33 +93,48 @@ package ru.hrundik.fScheme.exec
 			actionMap[ActionCodes.CASE_COND_CLAUSE] = caseCondClause;
 			actionMap[ActionCodes.QUASIQUOTE] = quasiquote;
 			actionMap[ActionCodes.SAVE_PROMISE] = savePromise;
+			
+			evalsTmp = new Vector.<Action>(100);
 		}
 		
-		private var actionMap:Object;
-		
-		public function execute (expression:*):*
+		public function execute(expression:*):*
 		{
+			actionStack = new Vector.<Action>();
+			resultStack = [];
+			
 			if(expression)
 				actionStack.push(new Action(ActionCodes.EVALUATE, expression));
 			
+			return executeToAction();
+		}
+		
+		public function executeToAction(targetAction:Action = null):*
+		{
+			var mainExecutor:Boolean = !_executing;
+			if (mainExecutor)
+				_executing = true;
 			while (actionStack.length > 0)
 			{
 				if(verbose)
-				{
-					if(steps == 45)
-						trace("time to take a look");
 					traceState();
-				}
-				var action:Action = actionStack.pop();
-				actionMap[action.actionCode](action);
+				
 				steps++;
 				if(verbose)
 					trace("-------------");
+				
+				var action:Action = actionStack.pop();
+				actionMap[action.actionCode](action);
+				
+				if(targetAction && action == targetAction)
+					break;
 			}
+			
+			if (mainExecutor)
+				_executing = false;
 			if (resultStack.length > 0)
 				return resultStack.pop();
 			else
-				return null;
+				return undefined;
 		}
 		
 		public function traceState():void
@@ -102,7 +157,6 @@ package ru.hrundik.fScheme.exec
 //
 //		Actions for action codes
 //		
-		
 		private function call (action:Action):void
 		{
 			var args:Array;
@@ -116,19 +170,20 @@ package ru.hrundik.fScheme.exec
 			}
 			else
 			{
-				args = [];
-				for (var i:int = action.argument; i > 0; i--)
+				args = new Array(action.argument);
+				for (var i:int = action.argument-1; i >= 0; i--)
 				{
-					args.unshift(resultStack.pop());
+					args[i] = resultStack.pop();
 				}
 			}
+			
 			var func:Function = resultStack.pop() as Function;
 			if (func == null)
 				throw new Error("Error on calling function - function undefined");
 			var n:int = actionStack.length;
 			if(n > 0 && actionStack[n-1].actionCode == ActionCodes.END_OF_CLAUSES)
 				actionStack.pop();
-
+			
 			var value:* = func.apply(this, args);
 			if (value !== undefined)
 				resultStack.push(value);
@@ -152,31 +207,37 @@ package ru.hrundik.fScheme.exec
 				}
 				else
 				{
-					var callAction:Action = new Action(ActionCodes.CALL, 0);
+					var callAction:Action = new Action(ActionCodes.CALL, 0); 
 					actionStack.push(callAction);
-					var evals:Vector.<Action> = new Vector.<Action>();
-					evals.unshift(new Action(ActionCodes.EVALUATE, funcExpr));
+					var evals:Vector.<Action> = evalsTmp;
+					var ei:int = evals.length-1;
+					evals[ei] = new Action(ActionCodes.EVALUATE, funcExpr);
 					var callArg:Pair = pairArg.cdrPair;
 					while (!callArg.isNull)
 					{
-						evals.unshift(new Action(ActionCodes.EVALUATE, callArg.car));
+						if (ei == 0)
+						{
+							evals = new Vector.<Action>(100).concat(evals);
+							ei = 100;
+						}
+						
+						evals[--ei] = new Action(ActionCodes.EVALUATE, callArg.car);
 						callAction.argument++;
 						callArg = callArg.cdrPair;
 					}
 					
 					var n:int = evals.length;
-					for (var i:int = 0; i < n; i++)
+					for (; ei < n; ei++)
 					{
-						actionStack.push(evals[i]);
+						actionStack.push(evals[ei]);
 					}
 				}
 			}
 			else if (arg is Name) // evaluate value
 			{
-				var name:Name = Name(arg);
-				var value:* = getValueByName(name, lexicalContext);
+				var value:* = getValueByName(Name(arg));
 				if (value == null)
-					throw new Error("Variable '"+name.value+"' is not defined!");
+					throw new Error("Variable '"+Name(arg).value+"' is not defined!");
 				resultStack.push(value);
 			}
 			else if (arg is Boolean || arg is int || arg is Number || arg is String || arg is Function)
@@ -189,8 +250,9 @@ package ru.hrundik.fScheme.exec
 			}
 		}
 		
-		private function getValueByName (name:Name, context:IContext):*
+		private function getValueByName (name:Name):*
 		{
+			var context:IContext = lexicalContext;
 			var nameValue:String = name.value;
 			var value:*;
 			while (context != null)
@@ -200,7 +262,17 @@ package ru.hrundik.fScheme.exec
 					return value;
 				context = context.parentContext;
 			}
-			throw new Error("Value of "+name+" is undefined!");
+			
+			// try class name definition
+			try
+			{
+				var definition:Object = getDefinitionByName(nameValue);
+				return definition;
+			}
+			catch (e:ReferenceError)
+			{
+				throw new Error("Value of "+name+" is undefined!");
+			}
 		}
 		
 		private function quote (action:Action):void
@@ -446,19 +518,27 @@ package ru.hrundik.fScheme.exec
 		
 		private function setVar (action:Action):void
 		{
-			var nameString:String = Name(action.argument).value;
-			var context:IContext = lexicalContext;
-			while (context != null)
+			if (action.argument)
 			{
-				if (context[nameString] !== undefined)
+				var nameString:String = Name(action.argument).value;
+				var context:IContext = lexicalContext;
+				while (context != null)
 				{
-					context[nameString] = resultStack.pop();
-					resultStack.push(undefined);
-					return;					
+					if (context[nameString] !== undefined)
+					{
+						context[nameString] = resultStack[resultStack.length-1];
+						return;					
+					}
+					context = context.parentContext;
 				}
-				context = context.parentContext;
+				throw new Error("set!: "+nameString+" is not defined.");
 			}
-			throw new Error("set!: "+nameString+" is not defined.");
+			else // setting instance field, which should be on the stack
+			{
+				var fieldName:String = resultStack.pop();
+				var instance:Object = resultStack.pop();
+				instance[fieldName] = resultStack[resultStack.length-1];
+			}
 		}
 	}
 }

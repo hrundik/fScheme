@@ -1,10 +1,32 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (C) 2010-2011 by Nikita Petrov                                      
+//	                                                                             
+// Permission is hereby granted, free of charge, to any person obtaining a copy  
+// of this software and associated documentation files (the "Software"), to deal 
+// in the Software without restriction, including without limitation the rights  
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell    
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//	
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//	
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+////////////////////////////////////////////////////////////////////////////////
+
 package ru.hrundik.fScheme.parser
 {
 	import ru.hrundik.fScheme.Pair;
 	import ru.hrundik.fScheme.Name;
 	import ru.hrundik.fScheme.SExpression;
 	
-	// v. 0.1.2
+	// v. 0.2
 	
 	public class SchemeParser
 	{
@@ -74,7 +96,7 @@ package ru.hrundik.fScheme.parser
 			var c2:String; 
 			var innerExpr:*;
 			var num:*;
-			if (c == ";")
+			while (c == ";")
 			{
 				var endOfLine:int = expression.indexOf("\n", lastIndex);
 				if (endOfLine == -1)
@@ -85,6 +107,7 @@ package ru.hrundik.fScheme.parser
 				else
 				{
 					lastIndex = endOfLine+1;
+					skipSpace();
 					c = expression.charAt(lastIndex);
 				}
 			}
@@ -209,12 +232,13 @@ package ru.hrundik.fScheme.parser
 			{
 				return parseName();
 			}
-			else // still may be a string or a special identifier (+, -, ...)
+			else // still may be a string or a special identifier (+, -, ., ...)
 			{
 				switch (c)
 				{
 					case "-":
 					case "+":
+					case ".":
 						lastIndex++;
 						return new Name(c);
 						break;
@@ -285,8 +309,18 @@ package ru.hrundik.fScheme.parser
 					else if (c == ".") // dotted pair
 					{
 						lastIndex++;
-						prevPair.cdr = parseExpression();
-						pair = null;
+						if (prevPair)
+						{
+							prevPair.cdr = parseExpression();
+							pair = null;
+						}
+						else // special "." name used for object manipulation
+						{
+							pair.car = new Name(".");
+							pair.cdr = new Pair();
+							prevPair = pair;
+							pair = pair.cdrPair;
+						}
 					}
 					else
 					{
@@ -305,7 +339,7 @@ package ru.hrundik.fScheme.parser
 			if (!idMatch || idMatch.index != lastIndex)
 				throw new Error("Syntax error at symbol #"+lastIndex);
 			lastIndex = idRegExp.lastIndex;	
-			return new Name(idMatch[1].toLowerCase());	
+			return new Name(idMatch[1]);	
 		}
 		
 		private function parseChar():String
@@ -377,7 +411,11 @@ package ru.hrundik.fScheme.parser
 				}
 				else // integer
 				{
-					return int(parseInt(numMatch[3]+numMatch[4]));
+					var n:String = numMatch[3]+numMatch[4];
+					if (n)
+						return int(parseInt(n));
+					else 
+						return null;
 				}
 			}
 			else

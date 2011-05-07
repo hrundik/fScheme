@@ -1,3 +1,25 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (C) 2010-2011 by Nikita Petrov                                      
+//	                                                                             
+// Permission is hereby granted, free of charge, to any person obtaining a copy  
+// of this software and associated documentation files (the "Software"), to deal 
+// in the Software without restriction, including without limitation the rights  
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell    
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//	
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//	
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+////////////////////////////////////////////////////////////////////////////////
+
 package ru.hrundik.fScheme.exec
 {
 	import ru.hrundik.fScheme.Name;
@@ -7,7 +29,7 @@ package ru.hrundik.fScheme.exec
 	
 	public dynamic class SpecialForms
 	{
-		private var continuation:Continuation;
+		protected var continuation:Continuation;
 		
 		public function SpecialForms(continuation:Continuation)
 		{
@@ -19,9 +41,13 @@ package ru.hrundik.fScheme.exec
 			this["set!"] = setVar;
 			this["'"] = quote;
 			this["`"] = quasiquote;
+			
+			evalsTmp = new Vector.<Action>(100);
 		}
 		
-		private function get actionStack():Vector.<Action>
+		protected var evalsTmp:Vector.<Action>;
+		
+		protected function get actionStack():Vector.<Action>
 		{
 			return continuation.actionStack;
 		}
@@ -152,12 +178,15 @@ package ru.hrundik.fScheme.exec
 			{
 				if(promise.resultEvaluated)
 					return promise.result;
+				
 				if(continuation.lexicalContext != context)
 					saveCurrentContext();
+				
 				actionStack.push(new Action(ActionCodes.SAVE_PROMISE, promise));
 				actionStack.push(new Action(ActionCodes.EVALUATE, promise.expression));
 				if(continuation.lexicalContext != context)
 					actionStack.push(new Action(ActionCodes.SET_CONTEXT, context));
+				
 			};
 			continuation.resultStack.push(evalPromise);
 		}
@@ -201,8 +230,13 @@ package ru.hrundik.fScheme.exec
 				else
 					body = new Pair(new Name("begin"), new Pair(body, increments));
 			}
+			
+			var exitExpr:* = testCond.cdrPair.car;
+			if (!exitExpr)
+				exitExpr = false;
+			
 			var ifClause:Pair = new Pair(testCond.car, // test expression
-												  new Pair(testCond.cdrPair.car, // exit expression
+												  new Pair(exitExpr, // exit expression
 												  new Pair(body, // loop body 
 													  	   new Pair())));
 			var fullIf:Pair = new Pair(new Name("if"), ifClause);
@@ -311,13 +345,14 @@ package ru.hrundik.fScheme.exec
 		{
 			actionStack.push(new Action(ActionCodes.END_OF_CLAUSES));
 			actionStack.push(new Action(ActionCodes.QUOTE, false));
-			var orActions:Array = [];
+			var orActions:Vector.<Action> = new Vector.<Action>();
 			while (!clause.isNull)
 			{
 				orActions.unshift(new Action(ActionCodes.EVALUATE, clause.car));
 				orActions.unshift(new Action(ActionCodes.COND_CLAUSE));
 				clause = clause.cdrPair;
 			}
+			pushActionsToStack(orActions);
 		}
 		
 		public function and (clause:Pair):void
@@ -364,7 +399,7 @@ package ru.hrundik.fScheme.exec
 			}				
 		}
 		
-		private function setVar (arg:Pair):void
+		protected function setVar (arg:Pair):void
 		{
 			var name:Name = arg.car as Name;
 			if (name == null)
@@ -380,7 +415,7 @@ package ru.hrundik.fScheme.exec
 			var context:IContext = continuation.lexicalContext;	
 			var proc:Function = function (...rest):*
 			{
-				saveCurrentContext();
+				var borderContextAction:Action = saveCurrentContext();
 				begin(body);
 				// bind args
 				if (args is Pair)
@@ -414,22 +449,40 @@ package ru.hrundik.fScheme.exec
 					throw new Error("lambda expression parameters should be specified either as list or as a single variable");
 				}
 				actionStack.push(new Action(ActionCodes.SET_CONTEXT, new ExpressionContext(context)));
+				
+				if (this == continuation) // call from Scheme
+					return;
+				else // call from AS code
+					return continuation.executeToAction(borderContextAction);
 			};
 			continuation.resultStack.push(proc);
 		}
 		
-		public function begin (arg:Pair):void
+		public function begin(arg:Pair):void
 		{
-			var evals:Array = [];
+			var evals:Vector.<Action> = evalsTmp;
+			var i:int = evalsTmp.length;
+			
+			evals[--i] = new Action(ActionCodes.EVALUATE, arg.car);	
+			arg = arg.cdrPair;
 			while (arg && !arg.isNull)
 			{
-				if (evals.length > 0)
-					evals.unshift(new Action(ActionCodes.DROP_RESULT));
-				evals.unshift(new Action(ActionCodes.EVALUATE, arg.car));	
+				if (i < 2)
+				{
+					evals = new Vector.<Action>(100).concat(evals);
+					i = 100 + i;
+				}
+				
+				evals[--i] = new Action(ActionCodes.DROP_RESULT);
+				evals[--i] = new Action(ActionCodes.EVALUATE, arg.car);	
 				arg = arg.cdrPair;
 			}
-			for each (var evalAction:Action in evals)
-				actionStack.push(evalAction);
+			
+			var n:int = evals.length;
+			for (; i < n; i++)
+			{
+				actionStack.push(evals[i]);
+			}
 		}
 		
 		/**
@@ -534,15 +587,21 @@ package ru.hrundik.fScheme.exec
 			actionStack.push(new Action(ActionCodes.SET_CONTEXT, new ExpressionContext(continuation.lexicalContext)));
 		}
 		
-		private function saveCurrentContext ():void
+		private function saveCurrentContext ():Action
 		{
 			var len:int = actionStack.length;
 			while(len > 0 && actionStack[len-1].actionCode == ActionCodes.CALL) // tail recursion optimization measures
 			{
 				len--;
 			}
+			
+			var contextAction:Action;
 			if(len == 0 || actionStack[len-1].actionCode != ActionCodes.SET_CONTEXT)
-				actionStack.push(new Action(ActionCodes.SET_CONTEXT, continuation.lexicalContext));
+				actionStack.push(contextAction = new Action(ActionCodes.SET_CONTEXT, continuation.lexicalContext));
+			else
+				contextAction = actionStack[len-1];
+			
+			return contextAction;
 		}
 		
 		private function pushActionsToStack (actions:Vector.<Action>):void

@@ -20,21 +20,30 @@
 // THE SOFTWARE.
 ////////////////////////////////////////////////////////////////////////////////
 
-package ru.hrundik.fScheme.exec
+package ru.hrundik.fScheme.exec.avm
 {
-	public dynamic class ExpressionContext implements IContext
-	{
-		private var _parentContext:IContext;
-		
-		public function ExpressionContext(parentContext:IContext)
-		{
-			_parentContext = parentContext; 
-		}
+import ru.hrundik.fScheme.exec.DefaultLexicalContext;
 
-		public function get parentContext():IContext
-		{
-			return _parentContext;
-		}
-		
+public dynamic class AVMContext extends DefaultLexicalContext
+{
+	public function AVMContext()
+	{
+		super();
+		this["new"] = new_object;
+		this["instance?"] = is_instance;
+		classConstructor = new ClassConstructor();
 	}
+	
+	private var classConstructor:ClassConstructor;
+	
+	private function new_object(classObject:Object, ...args):*
+	{
+		return classConstructor.construct(classObject, args);
+	}
+	
+	private function is_instance(classObject:Class, instance:*):Boolean
+	{
+		return instance is classObject;
+	}
+}
 }
